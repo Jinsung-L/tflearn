@@ -2,9 +2,11 @@
 from __future__ import division, print_function, absolute_import
 
 import re
+import time
 import numpy as np
 import tensorflow as tf
 from tensorflow.python.training import optimizer as tf_optimizer
+from tensorflow.core.protobuf import saver_pb2
 
 import tflearn
 from .. import callbacks as tf_callbacks
@@ -122,30 +124,33 @@ class Trainer(object):
             # Saver for saving a model
             self.saver = tf.train.Saver(
                 max_to_keep=max_checkpoints,
-                keep_checkpoint_every_n_hours=keep_checkpoint_every_n_hours)
+                keep_checkpoint_every_n_hours=keep_checkpoint_every_n_hours,
+                write_version=saver_pb2.SaverDef.V1)
             # Saver for restoring a model (With exclude variable list)
-            all_vars = tf.get_collection(tf.GraphKeys.VARIABLES)
+            all_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES)
             excl_vars = tf.get_collection(tf.GraphKeys.EXCL_RESTORE_VARS)
             to_restore = [item for item in all_vars
                           if check_restore_tensor(item, excl_vars)]
             self.restorer = tf.train.Saver(
                 var_list=to_restore,
                 max_to_keep=max_checkpoints,
-                keep_checkpoint_every_n_hours=keep_checkpoint_every_n_hours)
+                keep_checkpoint_every_n_hours=keep_checkpoint_every_n_hours,
+                write_version=saver_pb2.SaverDef.V1)
             # A second Saver, that only restore trainable variables
             to_restore_trainvars = [item for item in tf.trainable_variables()
                                     if check_restore_tensor(item, excl_vars)]
             self.restorer_trainvars = tf.train.Saver(
                 var_list=to_restore_trainvars,
                 max_to_keep=max_checkpoints,
-                keep_checkpoint_every_n_hours=keep_checkpoint_every_n_hours)
+                keep_checkpoint_every_n_hours=keep_checkpoint_every_n_hours,
+                write_version=saver_pb2.SaverDef.V1)
 
             self.to_restore = to_restore
             self.to_restore_trainvars = to_restore_trainvars
             self.checkpoint_path = checkpoint_path
 
             if not self.restored:
-                init = tf.initialize_all_variables()
+                init = tf.global_variables_initializer()
                 self.session.run(init)
 
     def fit(self, feed_dicts, n_epoch=10, val_feed_dicts=None, show_metric=False,
@@ -296,7 +301,8 @@ class Trainer(object):
                     # which data input), so one epoch loop in a multi-inputs
                     # model is equal to max(data_input) size.
                     for batch_step in range(max_batches_len):
-
+                        # start the timer for current batch_step
+                        batch_start = time.time()
                         self.training_state.increaseStep()
                         self.training_state.resetGlobal()
 
@@ -316,6 +322,9 @@ class Trainer(object):
 
                             # Optimizer batch end
                             caller.on_sub_batch_end(self.training_state, i)
+
+                        # Update training state step_time
+                        self.training_state.step_time = time.time() - batch_start
 
                         # All optimizers batch end
                         self.session.run(self.incr_global_step)
@@ -408,11 +417,11 @@ class Trainer(object):
                                  restored.
             scope_for_restore: string specifying the scope to limit to, when restoring variables.
                                Also removes the scope name prefix from the var name to use when restoring.
-            create_new_session: Set to False if the current session is to be kept.  
+            create_new_session: Set to False if the current session is to be kept.
                                 Set to True (the default) to create a new session, and re-init all variables.
             verbose           : Set to True to see a printout of what variables are being restored,
                                 when using scope_for_restore or variable_name_map
-        
+
         """
         if create_new_session:
             self.close_session()
@@ -421,7 +430,7 @@ class Trainer(object):
             if tflearn_conf:
                 config = tflearn_conf[0]
             self.session = tf.Session(config=config)
-            self.session.run(tf.initialize_all_variables())
+            self.session.run(tf.global_variables_initializer())
 
         if scope_for_restore is not None:	# allow variables to be restored into a different scope
             sname = scope_for_restore
@@ -451,7 +460,7 @@ class Trainer(object):
             renamed_to_restore = {vn_map_func(v.op.name): v for v in to_restore}
             if None in renamed_to_restore:
                 renamed_to_restore.pop(None)
-            restorer = tf.train.Saver(var_list=renamed_to_restore)
+            restorer = tf.train.Saver(var_list=renamed_to_restore, write_version=saver_pb2.SaverDef.V1)
             restorer.restore(self.session, model_file)
         elif not trainable_variable_only:
             self.restorer.restore(self.session, model_file)
@@ -519,11 +528,11 @@ class TrainOp(object):
         validation_monitors: `list` of `Tensor` objects.  List of variables
             to compute during validation, which are also used to produce
             summaries for output to TensorBoard.  For example, this can be
-            used to periodically record a confusion matrix or AUC metric, 
-            during training.  Each variable should have rank 1, i.e. 
+            used to periodically record a confusion matrix or AUC metric,
+            during training.  Each variable should have rank 1, i.e.
             shape [None].
         validation_batch_size: `int` or None. If `int`, specifies the batch
-            size to be used for the validation data feed; otherwise 
+            size to be used for the validation data feed; otherwise
             defaults to being th esame as `batch_size`.
         name: `str`. A name for this class (optional).
         graph: `tf.Graph`. Tensorflow Graph to use for training. Default:
@@ -974,6 +983,7 @@ class TrainingState(object):
         self.epoch = 0
         self.step = 0
         self.current_iter = 0
+        self.step_time = 0.0
 
         self.acc_value = None
         self.loss_value = None

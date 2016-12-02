@@ -1,6 +1,7 @@
 from __future__ import division, print_function, absolute_import
 
 import tensorflow as tf
+from tensorflow.core.protobuf import saver_pb2
 
 import tflearn
 from ..utils import to_list
@@ -32,7 +33,7 @@ class Evaluator(object):
         with self.graph.as_default():
             self.session = tf.Session()
             if session: self.session = session
-            self.saver = tf.train.Saver()
+            self.saver = tf.train.Saver(write_version=saver_pb2.SaverDef.V1)
             if model: self.saver.restore(self.session, model)
 
     def predict(self, feed_dict):
